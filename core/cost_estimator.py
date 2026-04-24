@@ -1,24 +1,47 @@
-def calcular_custo_manutencao(relatorio_complexidade):
-    """
-    Calcula uma estimativa simbólica de 'Débito Técnico' em dólares.
-    Lógica: Cada ponto de complexidade acima de 5 custa $10 em manutenção/mês.
-    """
-    custo_total = 0
-    for item in relatorio_complexidade:
-        score = item['complexidade']
-        if score > 5:
-            # Cálculo fictício de débito técnico
-            excesso = score - 5
-            custo_total += excesso * 10 
-            
-    return round(custo_total, 2)
+from core.aws_calculator import calculate_ec2_cost, calculate_rds_cost, calculate_lambda_cost
 
-def estimar_infra_aws(num_arquivos, tem_dependencias=True):
+def mapear_codigo_para_infra(relatorio_analise, regiao="us-east-1"):
     """
-    Simula o custo de processamento na AWS para análise estática.
+    Traduz métricas de código em componentes de infraestrutura AWS.
     """
-    base_price = 2.50 # Preço base por execução em Lambda/Serverless
-    custo_arquivos = num_arquivos * 0.10
+    recomendacao = {
+        "servicos": [],
+        "custo_total": 0
+    }
     
-    total = base_price + custo_arquivos
-    return round(total, 2)
+    # Decisão de Compute baseada em volume e tempo de execução
+    if relatorio_analise["total_linhas"] > 5000 or relatorio_analise["usa_processamento_pesado"]:
+        tipo_ec2 = "t3.medium" if relatorio_analise["usa_processamento_pesado"] else "t3.micro"
+        custo = calculate_ec2_cost(tipo_ec2, regiao)
+        recomendacao["servicos"].append({
+            "servico": f"EC2 ({tipo_ec2})",
+            "custo": custo,
+            "motivo": "Perfil de carga constante ou processamento pesado detectado."
+        })
+        recomendacao["custo_total"] += custo
+    else:
+        # Usa a latência média detectada para calcular o Lambda
+        latencia_media = relatorio_analise["latencia_total_ms"] / max(len(relatorio_analise["arquivos"]), 1)
+        custo = calculate_lambda_cost(100000, latencia_media, 512) # 100k req/mês
+        recomendacao["servicos"].append({
+            "servico": "AWS Lambda",
+            "custo": custo,
+            "motivo": f"Latência estimada de {latencia_media:.2f}ms favorece modelo Serverless."
+        })
+        recomendacao["custo_total"] += custo
+
+    if relatorio_analise["usa_db"]:
+        custo_db = calculate_rds_cost("db.t3.micro", regiao)
+        recomendacao["servicos"].append({
+            "servico": "RDS (db.t3.micro)",
+            "custo": custo_db,
+            "motivo": "Persistência de dados relacional detectada via imports."
+        })
+        recomendacao["custo_total"] += custo_db
+
+    return recomendacao
+
+def calcular_custo_manutencao(relatorio_analise):
+    """Estima custo operacional de manutenção baseado na complexidade."""
+    score = relatorio_analise["complexidade_media"]
+    return (score - 2) * 25 if score > 2 else 0
